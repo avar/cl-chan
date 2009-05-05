@@ -1,0 +1,129 @@
+What's the most efficient way to implement a chan?
+
+We have multiple boards:
+
+  /b/
+  /c/
+  ...
+Each board has a >= 0 threads which have >= 1 posts (the first being
+the start post)
+
+Each post has:
+
+  * A title || ''
+
+  * Author || Anonymous
+
+  * A date accurate down to a second (but no further, we'll depend on
+    the FS)
+
+  * A number, in 4chan this is a global ID shared across threads/posts
+    in all boards, it's incremented on each post/thread
+
+  * Text of limited size
+
+   * An image, images like posts/threads are also given a global
+     incrementing number
+
+When a post is posted to a thread the thread is 'bumped' on a given
+board bringing it to the top, all the threads are ordered by how
+recently they were bumped.
+
+A board holds a limited number of pages (10) and each page has a
+limited number of threads (10) and posts (5). The 5 shown are the
+latest 5 posted in the thread.
+
+When a thread dies which happens when it gets pushed off the 10th page
+by a new thread it and the images it contained are lost forever.
+
+---
+
+Implementation:
+
+Counter:
+
+The global counter shared between threads and posts can be resident in
+the server (and saved to disk on exit). We then get it back by reading
+the relevant files back in.
+
+Boards:
+
+A board is a directory on the file system with configuration data
+resident to the server.
+
+boards/
+  a/
+  b/
+  c/
+
+{
+  b => { post => .., image => ... },
+  ...
+}
+
+Thread:
+
+A thread is stored as a single file and contains each of its posts
+with all the information needed to render them except for the
+associated image (if any)
+
+If each post in the thread file is padded (by NULLS) it's possible to
+determine the number of threads just by calling stat() on the file,
+it'll also be possible to get only the last 5 posts (needed for the
+board summaries) by doing a stat(), seek()-ing into the file to a
+certain pre-known offset and reading from there.
+
+When a thread is updated its time stamp will change, and it's this
+time stamp that 
+
+Post:
+
+All the data is stored in the thread files except for the associated
+image.
+
+Images:
+
+Linked to by the threads, come up with a scheme to make it as
+inexpensive as possible to unlink them all at once along with the
+thread itself and yet fast to serve them up with a webserver.
+
+I wonder how storing each one in a separate file would compare to
+storing them all in one giant file with a index file of
+offsets/lengths. unlink() would take less time on just one file but
+would probably be offset by the overhead of keeping indexes and
+seek/read/write or sendfile() from the giant file.
+
+Try it out!
+
+Caching:
+
+We're serving out HTML which won't be stored as such in our thread
+files, keep cache files with pre-rendered html for each thread:
+
+  * The whole contents of the thread
+  * The last 5 posts in a seperate file?
+  * Index pages 1-10 on the board
+
+When a new post is added to a thread on the front page we'll already
+have pre-render html for all of the posts except the one that was just
+added. Add the new content to the `thread' and `thread.html'. The
+cached copy of the index page (containing a 5-post summary of 10
+threads) already exists pre-rendered except for html part representing
+the post that was just added. Generate a new index page and cache that
+too (index_1.html).
+
+Nothing will *ever* be dynamically generated except to update the html
+caches which will be served statically until something forces their
+regeneration. Every hit that's not a posting (or the first after a
+posting if we do lazy updates) will be a simple matter of serving a
+static file. This will make the system *extremely* scalable.
+
+Lazy:
+
+Threads don't have to actually be deleted when they fall of the board,
+we can just stop linking to them and delete them when it's convenient,
+the same goes for images.
+
+Replication:
+
+Could be done via rsyncing of data files, SMTP, RSS, IRC, name it.
